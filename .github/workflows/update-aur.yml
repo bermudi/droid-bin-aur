@@ -2,9 +2,8 @@ name: Update AUR Package
 
 on:
   schedule:
-    # Run every 12 hours
     - cron: '0 */12 * * *'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -12,54 +11,45 @@ on:
 jobs:
   update-aur:
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
     
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Install dependencies
         run: |
-          sudo pacman-key --init
-          sudo pacman-key --populate archlinux
-          sudo pacman -Syu --noconfirm base-devel git openssh
+          pacman -Syu --noconfirm git openssh base-devel curl
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Check for new version
         id: version
         run: |
-          # Fetch latest version from Factory's install script
-          LATEST_VERSION=$(curl -fsSL https://app.factory.ai/cli | grep '^VER=' | head -1 | cut -d'"' -f2)
-          CURRENT_VERSION=$(grep '^pkgver=' PKGBUILD | cut -d'=' -f2)
+          LATEST=$(curl -fsSL https://app.factory.ai/cli | grep '^VER=' | head -1 | cut -d'"' -f2)
+          CURRENT=$(grep '^pkgver=' PKGBUILD | cut -d'=' -f2)
           
-          echo "Latest version: $LATEST_VERSION"
-          echo "Current version: $CURRENT_VERSION"
-          echo "latest=$LATEST_VERSION" >> $GITHUB_OUTPUT
-          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Latest: $LATEST"
+          echo "Current: $CURRENT"
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
           
-          if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
+          if [ "$LATEST" != "$CURRENT" ]; then
             echo "update_needed=true" >> $GITHUB_OUTPUT
-            echo "🆕 New version detected: $LATEST_VERSION"
           else
             echo "update_needed=false" >> $GITHUB_OUTPUT
-            echo "✅ Already up to date"
           fi
 
-      - name: Download binaries and compute checksums
+      - name: Download and get checksums
         if: steps.version.outputs.update_needed == 'true'
         id: checksums
         run: |
           VERSION="${{ steps.version.outputs.latest }}"
           
-          # Download x86_64 binaries
           curl -fsSL -o droid-x64 "https://downloads.factory.ai/factory-cli/releases/${VERSION}/linux/x64/droid"
           curl -fsSL -o rg-x64 "https://downloads.factory.ai/ripgrep/linux/x64/rg"
-          
-          # Download arm64 binaries
           curl -fsSL -o droid-arm64 "https://downloads.factory.ai/factory-cli/releases/${VERSION}/linux/arm64/droid"
           curl -fsSL -o rg-arm64 "https://downloads.factory.ai/ripgrep/linux/arm64/rg"
           
-          # Compute checksums
           SHA_DROID_X64=$(sha256sum droid-x64 | awk '{print $1}')
           SHA_RG_X64=$(sha256sum rg-x64 | awk '{print $1}')
           SHA_DROID_ARM64=$(sha256sum droid-arm64 | awk '{print $1}')
@@ -69,41 +59,28 @@ jobs:
           echo "sha_rg_x64=$SHA_RG_X64" >> $GITHUB_OUTPUT
           echo "sha_droid_arm64=$SHA_DROID_ARM64" >> $GITHUB_OUTPUT
           echo "sha_rg_arm64=$SHA_RG_ARM64" >> $GITHUB_OUTPUT
-          
-          echo "📦 Checksums computed:"
-          echo "  droid x64: $SHA_DROID_X64"
-          echo "  rg x64: $SHA_RG_X64"
-          echo "  droid arm64: $SHA_DROID_ARM64"
-          echo "  rg arm64: $SHA_RG_ARM64"
 
       - name: Update PKGBUILD
         if: steps.version.outputs.update_needed == 'true'
         run: |
           VERSION="${{ steps.version.outputs.latest }}"
           
-          # Update version and reset pkgrel
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          
-          # Update checksums
-          sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${{ steps.checksums.outputs.sha_droid_x64}}' '${{ steps.checksums.outputs.sha_rg_x64 }}')/" PKGBUILD
+          sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${{ steps.checksums.outputs.sha_droid_x64 }}' '${{ steps.checksums.outputs.sha_rg_x64 }}')/" PKGBUILD
           sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${{ steps.checksums.outputs.sha_droid_arm64 }}' '${{ steps.checksums.outputs.sha_rg_arm64 }}')/" PKGBUILD
-          
-          echo "✏️  PKGBUILD updated to version $VERSION"
 
       - name: Generate .SRCINFO
         if: steps.version.outputs.update_needed == 'true'
         run: |
-          # Generate .SRCINFO as nobody user (makepkg requirement)
-          sudo -u nobody makepkg --printsrcinfo > .SRCINFO
-          echo "📄 .SRCINFO generated"
+          useradd -m builder
+          chown -R builder:builder .
+          sudo -u builder makepkg --printsrcinfo > .SRCINFO
 
-      - name: Test build package
+      - name: Test build
         if: steps.version.outputs.update_needed == 'true'
         run: |
-          # Test that the package builds correctly
-          sudo -u nobody makepkg --noconfirm
-          echo "✅ Package builds successfully"
+          sudo -u builder makepkg --noconfirm
 
       - name: Setup SSH for AUR
         if: steps.version.outputs.update_needed == 'true'
@@ -111,96 +88,30 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t rsa,ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
-          
-          # Configure SSH
-          cat >> ~/.ssh/config << 'EOF'
-          Host aur.archlinux.org
-            IdentityFile ~/.ssh/aur
-            User aur
-          EOF
-          
-          echo "🔐 SSH configured for AUR"
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
 
       - name: Configure Git
         if: steps.version.outputs.update_needed == 'true'
         run: |
           git config --global user.name "${{ secrets.AUR_USERNAME }}"
           git config --global user.email "${{ secrets.AUR_EMAIL }}"
-
-      - name: Clone and update AUR repository
-        if: steps.version.outputs.update_needed == 'true'
-        run: |
-          # Clone AUR repository
-          git clone ssh://aur@aur.archlinux.org/droid-bin.git aur-repo
-          
-          # Copy updated files
-          cp PKGBUILD aur-repo/
-          cp .SRCINFO aur-repo/
-          
-          # If you have a license file
-          if [ -f LICENSE ]; then
-            cp LICENSE aur-repo/
-          fi
-          if [ -f REUSE.toml ]; then
-            cp REUSE.toml aur-repo/
-          fi
-          
-          cd aur-repo
-          
-          # Show changes
-          git diff
-          
-          # Commit changes
-          git add PKGBUILD .SRCINFO LICENSE REUSE.toml 2>/dev/null || git add PKGBUILD .SRCINFO
-          git commit -m "Update to version ${{ steps.version.outputs.latest }}"
-          
-          echo "📝 Changes committed"
+          git config --global --add safe.directory /__w/droid-bin-aur/droid-bin-aur
 
       - name: Push to AUR
         if: steps.version.outputs.update_needed == 'true'
         run: |
+          git clone ssh://aur@aur.archlinux.org/droid-bin.git aur-repo
+          cp PKGBUILD .SRCINFO aur-repo/
           cd aur-repo
-          git push origin master
-          echo "🚀 Pushed to AUR successfully!"
-
-      - name: Commit to GitHub
-        if: steps.version.outputs.update_needed == 'true'
-        run: |
           git add PKGBUILD .SRCINFO
-          git commit -m "Update to version ${{ steps.version.outputs.latest }}"
-          git push
-          echo "📦 Pushed to GitHub successfully!"
-
-      - name: Create GitHub Release
-        if: steps.version.outputs.update_needed == 'true'
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.version.outputs.latest }}
-          release_name: v${{ steps.version.outputs.latest }}
-          body: |
-            Automatically updated droid-bin to version ${{ steps.version.outputs.latest }}
-            
-            Changes:
-            - Updated PKGBUILD
-            - Updated checksums
-            - Published to AUR
-          draft: false
-          prerelease: false
+          git commit -m "Update to ${{ steps.version.outputs.latest }}"
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push
 
       - name: Summary
         if: always()
         run: |
           if [ "${{ steps.version.outputs.update_needed }}" == "true" ]; then
-            echo "### ✅ Update Complete!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- **Previous version:** ${{ steps.version.outputs.current }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **New version:** ${{ steps.version.outputs.latest }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **AUR package:** https://aur.archlinux.org/packages/droid-bin" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Updated from ${{ steps.version.outputs.current }} to ${{ steps.version.outputs.latest }}"
           else
-            echo "### ℹ️ No Update Needed" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Package is already at the latest version: ${{ steps.version.outputs.current }}" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ Already up to date at ${{ steps.version.outputs.current }}"
           fi
