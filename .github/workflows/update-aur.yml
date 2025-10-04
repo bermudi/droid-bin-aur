@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm git openssh base-devel curl
+          pacman -Syu --noconfirm git openssh base-devel curl ripgrep xdg-utils
 
       - name: Checkout repository
         uses: actions/checkout@v4
