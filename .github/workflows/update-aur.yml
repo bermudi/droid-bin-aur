@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm git openssh base-devel curl ripgrep xdg-utils
+          pacman -Syu --noconfirm git openssh base-devel curl
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -101,7 +101,21 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          
+          # Add AUR to known hosts
+          ssh-keyscan -t rsa,ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          
+          # Create SSH config
+          cat >> ~/.ssh/config << 'EOF'
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur
+            User aur
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+          
           echo "🔐 SSH configured for AUR"
 
       - name: Configure Git
@@ -143,7 +157,7 @@ jobs:
           fi
           
           # Push to AUR
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push origin master
+          git push origin master
           
           echo "🚀 Pushed to AUR successfully!"
 
