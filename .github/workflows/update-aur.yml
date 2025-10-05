@@ -89,81 +89,28 @@ jobs:
           sudo -u builder makepkg --printsrcinfo > .SRCINFO
           echo "📄 .SRCINFO generated"
 
-      - name: Test build
+      - name: Publish to AUR
         if: steps.version.outputs.update_needed == 'true'
-        run: |
-          sudo -u builder makepkg --noconfirm
-          echo "✅ Package builds successfully"
-
-      - name: Setup SSH for AUR
-        if: steps.version.outputs.update_needed == 'true'
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-          chmod 700 ~/.ssh
-          
-          # Add AUR to known hosts
-          ssh-keyscan -t rsa,ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-          
-          # Create SSH config
-          cat >> ~/.ssh/config << 'EOF'
-          Host aur.archlinux.org
-            IdentityFile ~/.ssh/aur
-            User aur
-            StrictHostKeyChecking accept-new
-          EOF
-          chmod 600 ~/.ssh/config
-          
-          echo "🔐 SSH configured for AUR"
-
-      - name: Configure Git
-        if: steps.version.outputs.update_needed == 'true'
-        run: |
-          git config --global user.name "${{ secrets.AUR_USERNAME }}"
-          git config --global user.email "${{ secrets.AUR_EMAIL }}"
-          git config --global --add safe.directory /__w/droid-bin-aur/droid-bin-aur
-
-      - name: Push to AUR
-        if: steps.version.outputs.update_needed == 'true'
-        run: |
-          # Clone AUR repository
-          git clone ssh://aur@aur.archlinux.org/droid-bin.git aur-repo
-          
-          # Copy updated files
-          cp PKGBUILD .SRCINFO aur-repo/
-          
-          # Copy license file if it exists
-          if [ -f REUSE.toml ]; then
-            cp REUSE.toml aur-repo/
-          fi
-          if [ -f LICENSE ]; then
-            cp LICENSE aur-repo/
-          fi
-          
-          cd aur-repo
-          
-          # Show changes
-          git diff
-          
-          # Commit changes
-          git add PKGBUILD .SRCINFO REUSE.toml LICENSE 2>/dev/null || git add PKGBUILD .SRCINFO
-          
-          if [ "${{ steps.version.outputs.reason }}" = "version_bump" ]; then
-            git commit -m "Update to version ${{ steps.version.outputs.latest }}"
-          else
-            git commit -m "Update package (pkgrel bump or packaging fix)"
-          fi
-          
-          # Push to AUR
-          git push origin master
-          
-          echo "🚀 Pushed to AUR successfully!"
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: droid-bin
+          pkgbuild: ./PKGBUILD
+          assets: |
+            .SRCINFO
+            REUSE.toml
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: ${{ steps.version.outputs.reason == 'version_bump' && format('Update to version {0}', steps.version.outputs.latest) || 'Update package (pkgrel bump or packaging fix)' }}
+          ssh_keyscan_types: rsa,ecdsa,ed25519
+          test: true
 
       - name: Commit to GitHub
         if: steps.version.outputs.update_needed == 'true' && steps.version.outputs.reason == 'version_bump'
         run: |
+          git config --global user.name "${{ secrets.AUR_USERNAME }}"
+          git config --global user.email "${{ secrets.AUR_EMAIL }}"
+          git config --global --add safe.directory /__w/droid-bin-aur/droid-bin-aur
           git add PKGBUILD .SRCINFO
           git commit -m "Update to version ${{ steps.version.outputs.latest }}"
           git push
