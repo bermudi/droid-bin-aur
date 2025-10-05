@@ -1,0 +1,50 @@
+name: Print AUR secrets (safe)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  print:
+    runs-on: ubuntu-latest
+    env:
+      AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+    steps:
+      - name: Show which secrets are set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check() {
+            local name="$1" value="$2"
+            if [[ -n "$value" ]]; then
+              echo "$name is set: yes"
+              # Print length (characters) without revealing value
+              echo "$name length: ${#value}"
+
+              # Print a stable hash for comparison/debugging
+              # (safe to share; does not reveal the secret)
+              hash=$(printf %s "$value" | sha256sum | awk '{print $1}')
+              echo "$name sha256: $hash"
+            else
+              echo "$name is set: NO"
+              exit_code=1
+            fi
+          }
+
+          exit_code=0
+          check "AUR_EMAIL" "$AUR_EMAIL"
+          check "AUR_SSH_PRIVATE_KEY" "$AUR_SSH_PRIVATE_KEY"
+          check "AUR_USERNAME" "$AUR_USERNAME"
+
+          exit $exit_code
+
+      - name: Demonstrate masked echo (will show as ****)
+        shell: bash
+        run: |
+          echo "Masked AUR_EMAIL: $AUR_EMAIL"
+          echo "Masked AUR_USERNAME: $AUR_USERNAME"
+          # Multiline secrets like private keys will be masked as well
+          echo "Masked AUR_SSH_PRIVATE_KEY (first line):"
+          echo "$AUR_SSH_PRIVATE_KEY" | head -n 1
