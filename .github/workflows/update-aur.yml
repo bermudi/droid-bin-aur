@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm git openssh base-devel curl ripgrep xdg-utils
+          pacman -Syu --noconfirm git openssh base-devel curl xdg-utils
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,26 +60,45 @@ jobs:
           
           curl -fsSL -o droid-x64 "https://downloads.factory.ai/factory-cli/releases/${VERSION}/linux/x64/droid"
           curl -fsSL -o droid-arm64 "https://downloads.factory.ai/factory-cli/releases/${VERSION}/linux/arm64/droid"
+          curl -fsSL -o rg-x64 "https://downloads.factory.ai/ripgrep/linux/x64/rg"
+          curl -fsSL -o rg-arm64 "https://downloads.factory.ai/ripgrep/linux/arm64/rg"
           
           SHA_DROID_X64=$(sha256sum droid-x64 | awk '{print $1}')
           SHA_DROID_ARM64=$(sha256sum droid-arm64 | awk '{print $1}')
+          SHA_RG_X64=$(sha256sum rg-x64 | awk '{print $1}')
+          SHA_RG_ARM64=$(sha256sum rg-arm64 | awk '{print $1}')
           
           echo "sha_droid_x64=$SHA_DROID_X64" >> $GITHUB_OUTPUT
           echo "sha_droid_arm64=$SHA_DROID_ARM64" >> $GITHUB_OUTPUT
+          echo "sha_rg_x64=$SHA_RG_X64" >> $GITHUB_OUTPUT
+          echo "sha_rg_arm64=$SHA_RG_ARM64" >> $GITHUB_OUTPUT
           
           echo "📦 Checksums computed:"
           echo "  droid x64: $SHA_DROID_X64"
           echo "  droid arm64: $SHA_DROID_ARM64"
+          echo "  rg x64: $SHA_RG_X64"
+          echo "  rg arm64: $SHA_RG_ARM64"
 
       - name: Update PKGBUILD
         if: steps.version.outputs.update_needed == 'true' && steps.version.outputs.reason == 'version_bump'
         run: |
           VERSION="${{ steps.version.outputs.latest }}"
+          SHA_DROID_X64="${{ steps.checksums.outputs.sha_droid_x64 }}"
+          SHA_DROID_ARM64="${{ steps.checksums.outputs.sha_droid_arm64 }}"
+          SHA_RG_X64="${{ steps.checksums.outputs.sha_rg_x64 }}"
+          SHA_RG_ARM64="${{ steps.checksums.outputs.sha_rg_arm64 }}"
           
+          # Update version and pkgrel
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${{ steps.checksums.outputs.sha_droid_x64 }}')/" PKGBUILD
-          sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${{ steps.checksums.outputs.sha_droid_arm64 }}')/" PKGBUILD
+          
+          # Update x86_64 checksums (line 22-23)
+          sed -i "22s/'.*'/'$SHA_DROID_X64'/" PKGBUILD
+          sed -i "23s/'.*'/'$SHA_RG_X64'/" PKGBUILD
+          
+          # Update aarch64 checksums (line 26-27)
+          sed -i "26s/'.*'/'$SHA_DROID_ARM64'/" PKGBUILD
+          sed -i "27s/'.*'/'$SHA_RG_ARM64'/" PKGBUILD
           
           echo "✏️  PKGBUILD updated to version $VERSION"
 
@@ -101,7 +120,7 @@ jobs:
             .SRCINFO
             REUSE.toml
           post_process: |
-            rm -f droid droid-* *.pkg.tar.* *.pkg.tar.*.sig
+            rm -f droid droid-* rg rg-* *.pkg.tar.* *.pkg.tar.*.sig
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
