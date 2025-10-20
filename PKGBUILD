@@ -1,7 +1,7 @@
 # Maintainer: Daniel Bermúdez <archlinux.i5beg at dabg.uk>
 pkgname=droid-bin
-pkgver=0.18.2
-pkgrel=2
+pkgver=0.21.4
+pkgrel=1
 pkgdesc="Factory's development agent CLI"
 arch=('x86_64' 'aarch64')
 url="https://factory.ai"
@@ -12,8 +12,8 @@ conflicts=('droid')
 options=('!strip')
 source_x86_64=("droid::https://downloads.factory.ai/factory-cli/releases/${pkgver}/linux/x64/droid")
 source_aarch64=("droid::https://downloads.factory.ai/factory-cli/releases/${pkgver}/linux/arm64/droid")
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('dc29fa7b1fa92c93fe3a2aae410ff832a69f453654b473567a197774e54f5c28')
+sha256sums_aarch64=('e85e60fffd20ebc16bdde09b8cf2f522fcc83c58c8043e0dffff8a00051dd07b')
 
 package() {
     # Install droid binary
