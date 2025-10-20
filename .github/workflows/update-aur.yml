@@ -48,8 +48,14 @@ jobs:
             echo "reason=manual_trigger" >> $GITHUB_OUTPUT
             echo "🔄 Manual trigger - will push current package"
           else
-            echo "update_needed=false" >> $GITHUB_OUTPUT
-            echo "✅ Already up to date at $CURRENT-$CURRENT_REL"
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && (git diff --name-only HEAD~1 | grep -q '^PKGBUILD$' || git diff --name-only HEAD~1 | grep -q '^\.SRCINFO$'); then
+              echo "update_needed=true" >> $GITHUB_OUTPUT
+              echo "reason=packaging_update" >> $GITHUB_OUTPUT
+              echo "📦 Packaging files updated, publishing to AUR"
+            else
+              echo "update_needed=false" >> $GITHUB_OUTPUT
+              echo "✅ Already up to date at $CURRENT-$CURRENT_REL"
+            fi
           fi
 
       - name: Download and get checksums
@@ -129,15 +135,24 @@ jobs:
           test: true
 
       - name: Commit to GitHub
-        if: steps.version.outputs.update_needed == 'true' && steps.version.outputs.reason == 'version_bump'
+        if: steps.version.outputs.update_needed == 'true' && (steps.version.outputs.reason == 'version_bump' || steps.version.outputs.reason == 'packaging_update')
         run: |
           git config --global user.name "${{ secrets.AUR_USERNAME }}"
           git config --global user.email "${{ secrets.AUR_EMAIL }}"
           git config --global --add safe.directory /__w/droid-bin-aur/droid-bin-aur
+          if [ "${{ steps.version.outputs.reason }}" = "version_bump" ]; then
+            COMMIT_MSG="Update to version ${{ steps.version.outputs.latest }}"
+          else
+            COMMIT_MSG="Update package (pkgrel bump)"
+          fi
           git add PKGBUILD .SRCINFO
-          git commit -m "Update to version ${{ steps.version.outputs.latest }}"
-          git push
-          echo "📦 Pushed to GitHub successfully!"
+          if ! git diff --staged --quiet; then
+            git commit -m "$COMMIT_MSG"
+            git push
+            echo "📦 Pushed to GitHub successfully!"
+          else
+            echo "ℹ️ No changes to commit"
+          fi
 
       - name: Summary
         if: always()
