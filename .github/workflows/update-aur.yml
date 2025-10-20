@@ -19,12 +19,10 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm git openssh base-devel curl xdg-utils
+          pacman -Syu --noconfirm git openssh base-devel curl xdg-utils jq
 
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Check for new version
         id: version
@@ -34,31 +32,49 @@ jobs:
           CURRENT=$(grep '^pkgver=' PKGBUILD | cut -d'=' -f2)
           CURRENT_REL=$(grep '^pkgrel=' PKGBUILD | cut -d'=' -f2)
           
+          # Fetch current version from AUR
+          AUR_INFO=$(curl -fsSL "https://aur.archlinux.org/rpc/?v=5&type=info&arg=droid-bin")
+          AUR_VER=$(echo "$AUR_INFO" | jq -r '.results[0].Version // empty')
+          if [ -n "$AUR_VER" ]; then
+            AUR_CURRENT=$(echo "$AUR_VER" | cut -d'-' -f1)
+            AUR_CURRENT_REL=$(echo "$AUR_VER" | cut -d'-' -f2)
+            echo "AUR: $AUR_VER"
+          else
+            AUR_CURRENT=""
+            AUR_CURRENT_REL=""
+            echo "AUR: Not found (new package)"
+          fi
+          
           echo "Latest: $LATEST"
-          echo "Current: $CURRENT-$CURRENT_REL"
+          echo "Local: $CURRENT-$CURRENT_REL"
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           echo "current_rel=$CURRENT_REL" >> $GITHUB_OUTPUT
+          echo "aur_current=$AUR_CURRENT" >> $GITHUB_OUTPUT
+          echo "aur_current_rel=$AUR_CURRENT_REL" >> $GITHUB_OUTPUT
           
-          # Check if version changed OR if we need to force push (manual trigger)
+          # Check if update needed
+          update_needed=false
+          reason=""
+          
           if [ "$LATEST" != "$CURRENT" ]; then
-            echo "update_needed=true" >> $GITHUB_OUTPUT
-            echo "reason=version_bump" >> $GITHUB_OUTPUT
+            update_needed=true
+            reason="version_bump"
             echo "🆕 New version detected: $LATEST"
+          elif [ -n "$AUR_VER" ] && [ "$CURRENT" = "$AUR_CURRENT" ] && [ "$CURRENT_REL" -gt "$AUR_CURRENT_REL" 2>/dev/null ]; then
+            update_needed=true
+            reason="pkgrel_bump"
+            echo "📦 Local pkgrel ($CURRENT_REL) > AUR pkgrel ($AUR_CURRENT_REL), bumping release"
           elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "update_needed=true" >> $GITHUB_OUTPUT
-            echo "reason=manual_trigger" >> $GITHUB_OUTPUT
+            update_needed=true
+            reason="manual_trigger"
             echo "🔄 Manual trigger - will push current package"
           else
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && (git diff --name-only HEAD~1 | grep -q '^PKGBUILD$' || git diff --name-only HEAD~1 | grep -q '^\.SRCINFO$'); then
-              echo "update_needed=true" >> $GITHUB_OUTPUT
-              echo "reason=packaging_update" >> $GITHUB_OUTPUT
-              echo "📦 Packaging files updated, publishing to AUR"
-            else
-              echo "update_needed=false" >> $GITHUB_OUTPUT
-              echo "✅ Already up to date at $CURRENT-$CURRENT_REL"
-            fi
+            echo "✅ Already up to date at $CURRENT-$CURRENT_REL (AUR: $AUR_VER)"
           fi
+          
+          echo "update_needed=$update_needed" >> $GITHUB_OUTPUT
+          echo "reason=$reason" >> $GITHUB_OUTPUT
 
       - name: Download and get checksums
         if: steps.version.outputs.update_needed == 'true' && steps.version.outputs.reason == 'version_bump'
@@ -132,20 +148,20 @@ jobs:
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: ${{ steps.version.outputs.reason == 'version_bump' && format('Update to version {0}', steps.version.outputs.latest) || 'Update package (pkgrel bump or packaging fix)' }}
+          commit_message: ${{ steps.version.outputs.reason == 'version_bump' && format('Update to version {0}', steps.version.outputs.latest) || (steps.version.outputs.reason == 'pkgrel_bump' && format('Bump pkgrel to {0}', steps.version.outputs.current_rel)) || 'Update package (manual trigger or packaging fix)' }}
           ssh_keyscan_types: rsa,ecdsa,ed25519
           test: true
 
       - name: Commit to GitHub
-        if: steps.version.outputs.update_needed == 'true' && (steps.version.outputs.reason == 'version_bump' || steps.version.outputs.reason == 'packaging_update')
+        if: steps.version.outputs.update_needed == 'true' && (steps.version.outputs.reason == 'version_bump' || steps.version.outputs.reason == 'pkgrel_bump')
         run: |
           git config --global user.name "${{ secrets.AUR_USERNAME }}"
           git config --global user.email "${{ secrets.AUR_EMAIL }}"
           git config --global --add safe.directory /__w/droid-bin-aur/droid-bin-aur
           if [ "${{ steps.version.outputs.reason }}" = "version_bump" ]; then
             COMMIT_MSG="Update to version ${{ steps.version.outputs.latest }}"
-          else
-            COMMIT_MSG="Update package (pkgrel bump)"
+          elif [ "${{ steps.version.outputs.reason }}" = "pkgrel_bump" ]; then
+            COMMIT_MSG="Bump pkgrel to ${{ steps.version.outputs.current_rel }}"
           fi
           git add PKGBUILD .SRCINFO
           if ! git diff --staged --quiet; then
@@ -167,14 +183,23 @@ jobs:
               echo "- **Previous version:** ${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_rel }}" >> $GITHUB_STEP_SUMMARY
               echo "- **New version:** ${{ steps.version.outputs.latest }}-1" >> $GITHUB_STEP_SUMMARY
               echo "- **Reason:** Automatic version update" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ steps.version.outputs.reason }}" == "pkgrel_bump" ]; then
+              echo "- **AUR version:** ${{ steps.version.outputs.aur_current }}-${{ steps.version.outputs.aur_current_rel }}" >> $GITHUB_STEP_SUMMARY
+              echo "- **New version:** ${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_rel }}" >> $GITHUB_STEP_SUMMARY
+              echo "- **Reason:** pkgrel bump" >> $GITHUB_STEP_SUMMARY
             else
               echo "- **Version:** ${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_rel }}" >> $GITHUB_STEP_SUMMARY
-              echo "- **Reason:** Manual update (pkgrel bump or packaging fix)" >> $GITHUB_STEP_SUMMARY
+              echo "- **Reason:** Manual update" >> $GITHUB_STEP_SUMMARY
             fi
             
             echo "- **AUR package:** https://aur.archlinux.org/packages/droid-bin" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ℹ️ No Update Needed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Package is already at the latest version: ${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_rel }}" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${{ steps.version.outputs.aur_current }}" ]; then
+              echo "Local: ${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_rel }}" >> $GITHUB_STEP_SUMMARY
+              echo "AUR: ${{ steps.version.outputs.aur_current }}-${{ steps.version.outputs.aur_current_rel }}" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "Package is already at the latest version: ${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_rel }}" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
