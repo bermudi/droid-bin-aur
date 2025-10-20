@@ -1,7 +1,7 @@
 pkgbase = droid-bin
 	pkgdesc = Factory's development agent CLI
 	pkgver = 0.21.4
-	pkgrel = 1
+	pkgrel = 2
 	url = https://factory.ai
 	arch = x86_64
 	arch = aarch64
