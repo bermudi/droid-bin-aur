@@ -11,6 +11,8 @@ on:
 jobs:
   update-aur:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     container:
       image: archlinux:latest
     
